@@ -1,0 +1,4 @@
+livekit-agents[deepgram,silero,noise-cancellation,turn-detector]>=1.5,<2.0
+livekit-plugins-groq>=1.5,<2.0
+opik>=1.0.0
+python-dotenv>=1.0.0
