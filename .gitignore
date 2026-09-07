@@ -1,4 +1,5 @@
 .env
+IMPLEMENTATION.md
 __pycache__/
 *.pyc
 .venv/
