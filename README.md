@@ -14,14 +14,15 @@ cp .env.example .env              # add your API keys (see .env.example)
 
 python main.py analyze            # demo pipeline → Opik trace (no LiveKit needed)
 python main.py dev                # local test worker (talk to the agent via LiveKit playground)
-python main.py start              # production outbound worker (requires SIP trunk)
-python main.py dispatch --phone "+1234567890" --name "Sarah"   # schedule a call
+python main.py call --phone "+1234567890" --name "Sarah"   # one-command outbound call
+python main.py start              # production outbound worker only (requires SIP trunk)
+python main.py dispatch --phone "+1234567890" --name "Sarah"   # schedule a call (worker must be running)
 ```
 
 ## Architecture
 
 ```
-main.py                 → CLI entry point (dev/start/dispatch/analyze)
+main.py                 → CLI entry point (dev/start/call/dispatch/analyze)
 ├── agent.py            → LiveKit HealthcareAgent + shared call flow (_run_call)
 ├── ai_gateway.py       → Standalone AI Gateway (rate limit, throttle, circuit breaker, retry, guardrails)
 ├── gateway_llm.py      → LiveKit bridge: GatewayLLM(groq.LLM) routing through the gateway
@@ -134,6 +135,32 @@ Then connect via the LiveKit playground or your own client to interact with the 
 > `lk agent start --entrypoint agent.py` (configure agent name via `LIVEKIT_AGENT_NAME`).
 
 ### Production Outbound Calling
+
+**Option A — one command (recommended for a single call):**
+
+`call` starts the worker in a background thread, waits for it to register with
+LiveKit Cloud, dispatches the call, and stays alive until the call ends — so the
+whole flow runs from a single terminal:
+
+```bash
+python main.py call \
+  --phone "+1234567890" \
+  --name "Sarah Johnson" \
+  --patient-id "PT-2024-0042"
+```
+
+> There is no way around the fact that LiveKit's worker is a **long-running
+> process** and a dispatch is a **separate API call** — the worker must be
+> registered before LiveKit can route a job to it. `call` simply orchestrates
+> both inside one process so you don't need two terminals.
+>
+> - `--worker-wait <seconds>` controls how long to wait for the worker to
+>   register before dispatching (default `8`). Raise it if the worker is slow
+>   to connect.
+> - `--detach` runs the worker as a separate subprocess instead of a background
+>   thread (useful if the in-process thread conflicts with your environment).
+
+**Option B — separate terminals (long-running worker):**
 
 1. Start the agent worker:
 
@@ -333,7 +360,8 @@ outbound_healthcare_call (Trace)
 |---|---|
 | `ModuleNotFoundError: No module named 'livekit'` | Run `pip install -r requirements.txt` in the activated venv. |
 | `SIP call failed: no such host "my-voice-agent1 .pstn.twilio.com"` | Remove the stray space in your SIP trunk address in **LiveKit Console → SIP → Outbound Trunks** (e.g. `my-voice-agent1.pstn.twilio.com`). |
-| `dispatch` prints nothing after running | Expected — dispatch is fire-and-forget. Make sure `python main.py start` is running in another terminal; the worker log and Opik trace show the outcome. |
+| `dispatch` prints nothing after running | Expected — dispatch is fire-and-forget. Make sure `python main.py start` is running in another terminal; the worker log and Opik trace show the outcome. Use `python main.py call ...` for a single-command flow. |
+| The agent doesn't answer in `call` mode | The worker hadn't registered before the dispatch fired. Raise `--worker-wait` (e.g. `--worker-wait 15`). |
 | `GROQ_API_KEY not set; cannot run LLM-as-judge evaluation` | Ensure `GROQ_API_KEY` is set in your `.env` file (the judge calls Groq directly inside `opik_integration.py`). |
 | `worker is at full capacity, marking as unavailable` | Normal load-based scaling — the worker recovers automatically within a few seconds. |
 
@@ -388,7 +416,7 @@ def evaluate_call_quality(self, trace_id, transcript, analysis):
 
 | File | Purpose |
 |------|---------|
-| `main.py` | CLI entry point — commands: `dev`, `start`, `dispatch`, `analyze` |
+| `main.py` | CLI entry point — commands: `dev`, `start`, `call`, `dispatch`, `analyze` |
 | `agent.py` | LiveKit HealthcareAgent, `@function_tool`, shared call flow (`_run_call`) |
 | `ai_gateway.py` | Standalone AI Gateway — rate limit, throttle, circuit breaker, retry, guardrails |
 | `gateway_llm.py` | LiveKit bridge: `GatewayLLM(groq.LLM)` routing LLM calls through the gateway |
