@@ -27,6 +27,7 @@ def analyze_call(
     """
     appointment_booked = False
     appointment_details: dict[str, Any] = {}
+    patient_agreed_not_booked = False
     key_topics: list[str] = []
     sentiment = "neutral"
 
@@ -38,6 +39,25 @@ def analyze_call(
                 appointment_details = tc.result
             elif isinstance(tc.result, str):
                 appointment_details = {"confirmation": tc.result}
+
+    # Cross-check the transcript: if the patient explicitly agreed to book but
+    # the tool was never invoked, flag it as a missed booking.
+    # This catches LLM failures where book_appointment was not called even
+    # though the patient consented.
+    if not appointment_booked:
+        patient_turns = [t.content.lower() for t in transcript if t.role == "user"]
+        agreement_words = [
+            "yes", "yeah", "yep", "sure", "ok", "okay", "please", "please do",
+            "go ahead", "book it", "book me", "schedule", "schedule me",
+            "make an appointment", "i'd like", "i would like", "confirmed",
+        ]
+        booking_context_words = ["appointment", "book", "schedule", "consultation", "visit", "doctor"]
+        for turn in patient_turns:
+            mentions_context = any(w in turn for w in booking_context_words)
+            agrees = any(w in turn for w in agreement_words)
+            if mentions_context and agrees:
+                patient_agreed_not_booked = True
+                break
 
     # Analyze transcript for topics
     topic_keywords = {
@@ -90,6 +110,11 @@ def analyze_call(
 
     if appointment_booked:
         summary_parts.append("Appointment was successfully booked.")
+    elif patient_agreed_not_booked:
+        summary_parts.append(
+            "Patient agreed to book an appointment but no booking was confirmed "
+            "(tool call missed) - review required."
+        )
     else:
         summary_parts.append("No appointment was booked during this call.")
 
@@ -99,6 +124,7 @@ def analyze_call(
         call_outcome=call_outcome,
         appointment_booked=appointment_booked,
         appointment_details=appointment_details,
+        patient_agreed_not_booked=patient_agreed_not_booked,
         key_topics_discussed=key_topics,
         sentiment=sentiment,
         duration_seconds=call_duration,

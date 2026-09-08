@@ -209,13 +209,13 @@ Run the complete analysis pipeline with sample data to see Opik integration:
 python main.py analyze
 ```
 
-This creates a trace in Opik with:
+This creates traces in Opik with:
 - Call metadata and variables (patient, biomarkers, mode)
 - Audio reference (LiveKit room name + optional recording URL)
-- Sample conversation transcript (individual turns + full transcript)
-- Simulated appointment booking tool call
+- Conversation transcripts (individual turns + full transcript)
+- Appointment booking tool calls (successful booking + a missed-booking demo case)
 - Post-call analysis
-- Evaluation results (biomarker coverage, appointment discussion, conversation completeness, professional tone, call outcome, LLM-as-judge quality score)
+- Evaluation results (biomarker coverage, appointment discussion, conversation completeness, professional tone, call outcome, booking follow-through, LLM-as-judge quality score)
 
 ## Modules
 
@@ -248,7 +248,10 @@ The LiveKit agent that:
 
 Analyzes the call to determine:
 - Call outcome (completed, no_answer, busy, error)
-- Whether an appointment was booked
+- Whether an appointment was booked (source of truth = `book_appointment` tool call result)
+- **Missed booking detection**: cross-checks the transcript for patient consent
+  (`patient_agreed_not_booked`) to catch LLM failures where the patient agreed to
+  book but the tool was never invoked
 - Key topics discussed (glucose, HbA1c, cholesterol, etc.)
 - Overall sentiment
 - Human-readable summary
@@ -307,7 +310,7 @@ gracefully instead of hammering the provider.
 
 ## Opik Evaluations
 
-The system implements 6 evaluation metrics, all logged as **feedback scores** on each
+The system implements 7 evaluation metrics, all logged as **feedback scores** on each
 call's Opik trace:
 
 | Metric | Type | Description |
@@ -317,6 +320,7 @@ call's Opik trace:
 | `conversation_completeness` | Rule-based | Minimum user responses exchanged |
 | `professional_tone` | Rule-based | No unprofessional language detected |
 | `call_outcome` | Rule-based | Appropriate call handling |
+| `booking_follow_through` | Rule-based | If the patient agreed to book, was the appointment actually confirmed? |
 | `overall_call_quality` | **LLM-as-judge (online)** | Real Groq call scores the call 0.0-1.0 |
 
 The LLM-as-judge (`run_llm_evaluation()`) runs automatically after every completed call

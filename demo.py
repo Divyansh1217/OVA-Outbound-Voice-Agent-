@@ -34,3 +34,16 @@ SAMPLE_TOOL_CALL = ToolCallRecord(
     arguments=SAMPLE_BOOKING_ARGS,
     result=SAMPLE_BOOKING_RESULT,
 )
+
+
+SAMPLE_MISSED_BOOKING_TRANSCRIPT: list[ConversationTurn] = [
+    ConversationTurn(role="assistant", content="Good morning! This is Dr. AI calling from HealthCare Plus. Am I speaking with John Doe?"),
+    ConversationTurn(role="user", content="Yes, this is John."),
+    ConversationTurn(role="assistant", content="Hi John, I'm calling about your latest lab results. Your fasting blood glucose was 150 mg/dL and your HbA1c was 8.1%, both above the normal range. We strongly recommend a follow-up consultation with your doctor."),
+    ConversationTurn(role="user", content="Okay, yes please, please book me an appointment with the doctor."),
+    ConversationTurn(role="assistant", content="Of course, that sounds like a great idea. Let me note that you'd like to see the doctor soon."),
+    ConversationTurn(role="user", content="Can you confirm the appointment time?"),
+    ConversationTurn(role="assistant", content="I'll make sure the details are sent to you. Take care and goodbye!"),
+]
+
+SAMPLE_MISSED_BOOKING_TOOL_CALLS: list[ToolCallRecord] = []

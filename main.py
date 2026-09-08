@@ -192,7 +192,13 @@ def run_call(args: argparse.Namespace) -> None:
 
 
 def run_analyze() -> None:
-    """Run post-call analysis and Opik logging on the sample call."""
+    """Run post-call analysis and Opik logging on the sample calls.
+
+    Demonstrates both scenarios:
+      1. Successful booking (tool call confirm)
+      2. Patient agreed but tool was never invoked (missed booking detected via
+         transcript cross-check)
+    """
     import demo
     from config import SAMPLE_PATIENT, load_config
     from opik_integration import OpikIntegration
@@ -208,46 +214,64 @@ def run_analyze() -> None:
     )
     opik.initialize()
 
-    trace_id = opik.create_call_trace(SAMPLE_PATIENT, {"mode": "manual_analysis"})
-    opik.log_audio_reference(trace_id, "demo-room")
+    scenarios = [
+        (
+            "CALL 1 - SUCCESSFUL BOOKING",
+            SAMPLE_PATIENT,
+            "demo-room",
+            demo.SAMPLE_TRANSCRIPT,
+            [demo.SAMPLE_TOOL_CALL],
+            185.0,
+        ),
+        (
+            "CALL 2 - MISSED BOOKING (patient agreed, tool missed)",
+            SAMPLE_PATIENT,
+            "demo-room-missed",
+            demo.SAMPLE_MISSED_BOOKING_TRANSCRIPT,
+            demo.SAMPLE_MISSED_BOOKING_TOOL_CALLS,
+            160.0,
+        ),
+    ]
 
-    for turn in demo.SAMPLE_TRANSCRIPT:
-        opik.log_conversation_item(trace_id, turn.role, turn.content)
-    opik.log_full_transcript(trace_id, demo.SAMPLE_TRANSCRIPT)
-    opik.log_tool_call(
-        trace_id,
-        demo.SAMPLE_TOOL_CALL.tool_name,
-        demo.SAMPLE_TOOL_CALL.arguments,
-        demo.SAMPLE_TOOL_CALL.result,
-    )
+    for label, patient, room, transcript, tool_calls, duration in scenarios:
+        trace_id = opik.create_call_trace(patient, {"mode": "manual_analysis"})
+        opik.log_audio_reference(trace_id, room)
 
-    analysis = analyze_call(
-        transcript=demo.SAMPLE_TRANSCRIPT,
-        tool_calls=[demo.SAMPLE_TOOL_CALL],
-        call_duration=185.0,
-    )
-    opik.log_post_call_analysis(trace_id, analysis)
+        for turn in transcript:
+            opik.log_conversation_item(trace_id, turn.role, turn.content)
+        opik.log_full_transcript(trace_id, transcript)
+        for tc in tool_calls:
+            opik.log_tool_call(trace_id, tc.tool_name, tc.arguments, tc.result)
 
-    eval_results = opik.run_evaluation(trace_id, demo.SAMPLE_TRANSCRIPT, analysis)
-    eval_results.append(opik.run_llm_evaluation(trace_id, demo.SAMPLE_TRANSCRIPT, analysis))
+        analysis = analyze_call(
+            transcript=transcript,
+            tool_calls=tool_calls,
+            call_duration=duration,
+        )
+        opik.log_post_call_analysis(trace_id, analysis)
+
+        eval_results = opik.run_evaluation(trace_id, transcript, analysis)
+        eval_results.append(opik.run_llm_evaluation(trace_id, transcript, analysis))
+
+        print("\n" + "=" * 60)
+        print(label)
+        print("=" * 60)
+        print(f"Outcome: {analysis.call_outcome}")
+        print(f"Appointment Booked: {analysis.appointment_booked}")
+        print(f"Patient Agreed But Not Booked: {analysis.patient_agreed_not_booked}")
+        if analysis.appointment_details:
+            print(f"Appointment Details: {json.dumps(analysis.appointment_details, indent=2)}")
+        print(f"Topics Discussed: {', '.join(analysis.key_topics_discussed)}")
+        print(f"Sentiment: {analysis.sentiment}")
+        print(f"Summary: {analysis.summary}")
+        print(f"\nOpik Trace ID: {trace_id}")
+        print(f"Opik Project: {config['opik_project']}")
+        print("\nEVALUATION RESULTS:")
+        for er in eval_results:
+            status = "PASS" if er.passed else "FAIL"
+            print(f"  [{status}] {er.metric_name}: {er.score:.2f} - {er.reason}")
 
     opik.flush()
-
-    # Print results
-    print("\n" + "=" * 60)
-    print("POST-CALL ANALYSIS")
-    print("=" * 60)
-    print(f"Outcome: {analysis.call_outcome}")
-    print(f"Appointment Booked: {analysis.appointment_booked}")
-    print(f"Topics Discussed: {', '.join(analysis.key_topics_discussed)}")
-    print(f"Sentiment: {analysis.sentiment}")
-    print(f"Summary: {analysis.summary}")
-    print(f"\nOpik Trace ID: {trace_id}")
-    print(f"Opik Project: {config['opik_project']}")
-    print("\nEVALUATION RESULTS:")
-    for er in eval_results:
-        status = "PASS" if er.passed else "FAIL"
-        print(f"  [{status}] {er.metric_name}: {er.score:.2f} - {er.reason}")
     print("=" * 60)
 
 

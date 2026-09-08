@@ -70,6 +70,7 @@ class PostCallAnalysis:
     call_outcome: str  # "completed", "no_answer", "busy", "declined", "error"
     appointment_booked: bool = False
     appointment_details: dict[str, Any] = field(default_factory=dict)
+    patient_agreed_not_booked: bool = False
     key_topics_discussed: list[str] = field(default_factory=list)
     sentiment: str = "neutral"
     duration_seconds: float = 0.0
@@ -296,6 +297,7 @@ class OpikIntegration:
             "call_outcome": analysis.call_outcome,
             "appointment_booked": analysis.appointment_booked,
             "appointment_details": analysis.appointment_details,
+            "patient_agreed_not_booked": analysis.patient_agreed_not_booked,
             "key_topics_discussed": analysis.key_topics_discussed,
             "sentiment": analysis.sentiment,
             "duration_seconds": analysis.duration_seconds,
@@ -412,6 +414,29 @@ class OpikIntegration:
             )
         )
 
+        # Metric 6: Booking Follow-Through - if the patient agreed to book,
+        # the appointment must actually be confirmed.
+        if analysis.appointment_booked:
+            booking_score, booking_reason = 1.0, "Appointment successfully booked"
+            booking_passed = True
+        elif analysis.patient_agreed_not_booked:
+            booking_score, booking_reason = 0.0, (
+                "Patient agreed to an appointment but the booking tool was never "
+                "invoked - missed confirmation"
+            )
+            booking_passed = False
+        else:
+            booking_score, booking_reason = 1.0, "No booking expected (patient did not agree)"
+            booking_passed = True
+        results.append(
+            EvaluationResult(
+                metric_name="booking_follow_through",
+                score=booking_score,
+                reason=booking_reason,
+                passed=booking_passed,
+            )
+        )
+
         return results
 
     def run_evaluation(
@@ -484,6 +509,7 @@ TRANSCRIPT:
 ANALYSIS:
 - Outcome: {analysis.call_outcome}
 - Appointment booked: {analysis.appointment_booked}
+- Patient agreed but booking not confirmed: {analysis.patient_agreed_not_booked}
 - Sentiment: {analysis.sentiment}
 - Summary: {analysis.summary}
 
@@ -492,6 +518,7 @@ Rate this call on a scale of 0.0 to 1.0 considering:
 2. Was the tone appropriate for a healthcare context?
 3. Was the agent helpful in scheduling follow-up care?
 4. Did the conversation flow naturally?
+5. Did the agent follow through on booking an appointment when the patient agreed?
 
 Reply with exactly two lines:
 SCORE: <a single number between 0.0 and 1.0>
@@ -535,6 +562,7 @@ REASON: <one short sentence>"""
                         "tone_appropriateness",
                         "scheduling_helpfulness",
                         "conversation_flow",
+                        "booking_follow_through",
                     ],
                 },
             )
