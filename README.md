@@ -19,9 +19,65 @@ python main.py start              # production outbound worker only (requires SI
 python main.py dispatch --phone "+1234567890" --name "Sarah"   # schedule a call (worker must be running)
 ```
 
+## Doctor Dashboard (React + FastAPI)
+
+The dashboard is the doctor-facing app:**doctors add a patient, enter their lab report
+(biomarkers), and arrange an AI voice call** where the agent calls the client over the
+phone and discusses the report — then the doctor watches the call live and reviews the
+transcript, booking result, and quality scores.
+
+```
+backend/   → FastAPI: endpoints / models (SQLAlchemy ORM) / schemas (Pydantic) / services / core
+frontend/  → React + TypeScript (Vite): pages, components, src/services (API + SSE stream)
+reporter.py→ LiveKit worker callback that streams transcript events + final result to the dashboard
+voiceagent.db → SQLite database (auto-created on first run)
+```
+
+**Run it (three terminals):**
+
+```bash
+# Terminal 1 — LiveKit worker (must be running to accept call jobs)
+python main.py start
+
+# Terminal 2 — FastAPI backend
+python -m uvicorn backend.main:app --reload --port 8001
+
+# Terminal 3 — React frontend
+cd frontend
+npm install
+npm run dev
+```
+
+Then open http://localhost:5173. Flow:
+
+1. **Patients → Add Patient** — enter name + phone.
+2. Add the **lab report** (biomarker name, value, unit, reference range, status —
+   status is auto-inferred from value vs reference range when possible).
+3. **Arrange call** (choose morning/afternoon/evening) → the agent calls the patient
+   and discusses the report, offering to book a doctor consultation.
+4. Open the call to see **live progress** (dispatched → accepted → in-progress →
+   completed) with the **transcript streaming in real time** (SSE), plus the booked
+   appointment details, post-call analysis, sentiment, topics, and evaluation scores.
+
+Requires `INTERNAL_API_URL` in `.env` (defaults to `http://localhost:8001`) so the
+worker can report back. If the dashboard is offline the agent simply skips reporting —
+outbound calls still work independently.
+
 ## Architecture
 
 ```
+backend/                → FastAPI dashboard API (doctor app)
+├── main.py             → app factory, CORS, router mounting
+├── endpoints/          → HTTP handlers: health, dashboard, patients, calls, internal
+├── models/             → SQLAlchemy ORM entities (Patient, Biomarker, Call, Transcript, Evaluation) + serializers
+├── schemas/            → Pydantic request/response models
+├── services/           → business logic: patient_service, call_service, livekit, dashboard_service
+└── core/               → SQLAlchemy engine/session + SSE event bus
+frontend/               → React dashboard (Vite + TypeScript)
+├── src/services/       → api client, patients, calls, call-stream (SSE)
+├── src/pages/          → Dashboard, Patients, PatientForm, PatientDetail, Calls, CallDetail
+└── src/components/     → Layout, StatusBadge, BiomarkerTable, BiomarkerRows, ...
+reporter.py             → CallReporter: batches live events + posts final result to the backend
 main.py                 → CLI entry point (dev/start/call/dispatch/analyze)
 ├── agent.py            → LiveKit HealthcareAgent + shared call flow (_run_call)
 ├── ai_gateway.py       → Standalone AI Gateway (rate limit, throttle, circuit breaker, retry, guardrails)
@@ -89,6 +145,11 @@ Optional:
 - `CALL_RECORDING_URL` - URL of the recorded call audio (e.g. a LiveKit Egress URL).
   When unset, only the LiveKit room name is logged to Opik.
 - `GROQ_MODEL` - Model used by the LLM-as-judge evaluation (defaults to `openai/gpt-oss-120b`).
+- `INTERNAL_API_URL` - Base URL of the FastAPI dashboard (`http://localhost:8001`).
+  The worker streams live events and the final result here. If unset, calls run
+  normally but the dashboard never receives data.
+- `VOICEAGENT_DB_URL` - Optional override for the SQLAlchemy database URL
+  (defaults to `sqlite:///voiceagent.db` in the project root).
 
 ### 4. SIP Trunk Setup (Outbound Calling)
 

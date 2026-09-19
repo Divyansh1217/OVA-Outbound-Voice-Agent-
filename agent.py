@@ -29,6 +29,7 @@ from opik_integration import (
     ToolCallRecord,
 )
 from post_call_analysis import analyze_call
+from reporter import CallReporter
 
 logger = logging.getLogger(__name__)
 
@@ -98,11 +99,13 @@ class HealthcareAgent(Agent):
         opik: OpikIntegration | None = None,
         trace_id: str = "",
         llm: Any = None,
+        reporter: CallReporter | None = None,
     ):
         self.patient = patient
         self.opik = opik
         self.trace_id = trace_id
         self._llm = llm
+        self._reporter = reporter
         self.transcript: list[ConversationTurn] = []
         self.tool_calls: list[ToolCallRecord] = []
         self.call_start_time: datetime = datetime.now(timezone.utc)
@@ -212,6 +215,11 @@ IMPORTANT GUIDELINES:
                     self.opik.log_conversation_item(
                         self.trace_id, "user", event.transcript
                     )
+                if self._reporter:
+                    self._reporter.push(
+                        "conversation",
+                        {"role": "user", "content": event.transcript},
+                    )
 
         @session.on("conversation_item_added")
         def on_conversation_item(event: Any) -> None:
@@ -228,6 +236,11 @@ IMPORTANT GUIDELINES:
                     if self.opik and self.trace_id:
                         self.opik.log_conversation_item(
                             self.trace_id, "assistant", content
+                        )
+                    if self._reporter:
+                        self._reporter.push(
+                            "conversation",
+                            {"role": "assistant", "content": content},
                         )
 
     # ------------------------------------------------------------------
@@ -253,16 +266,40 @@ def _make_session(llm: GatewayLLM) -> AgentSession:
     )
 
 
-def _log_results(opik: OpikIntegration, trace_id: str, agent: HealthcareAgent) -> None:
-    """Log post-call analysis, transcript, and evaluations for a finished call."""
+async def _log_results(
+    opik: OpikIntegration,
+    trace_id: str,
+    agent: HealthcareAgent,
+    reporter: CallReporter | None = None,
+) -> None:
+    """Log post-call analysis, transcript, evaluations, and report back to the dashboard."""
+    import dataclasses
+
     analysis = agent.get_post_call_analysis()
     opik.log_post_call_analysis(trace_id, analysis)
+    evaluations: list = []
     if agent.transcript:
         opik.log_full_transcript(trace_id, agent.transcript)
-        opik.run_evaluation(trace_id, agent.transcript, analysis)
-        opik.run_llm_evaluation(trace_id, agent.transcript, analysis)
+        evaluations = opik.run_evaluation(trace_id, agent.transcript, analysis)
+        evaluations.append(opik.run_llm_evaluation(trace_id, agent.transcript, analysis))
     opik.flush()
     logger.info("Call completed. Analysis: %s", analysis.summary)
+
+    if reporter and reporter.enabled:
+        payload = {
+            "status": analysis.call_outcome,
+            "outcome": analysis.call_outcome,
+            "duration_seconds": analysis.duration_seconds,
+            "appointment_booked": analysis.appointment_booked,
+            "appointment_details": analysis.appointment_details,
+            "patient_agreed_not_booked": analysis.patient_agreed_not_booked,
+            "key_topics": analysis.key_topics_discussed,
+            "sentiment": analysis.sentiment,
+            "summary": analysis.summary,
+            "transcript": [dataclasses.asdict(t) for t in agent.transcript],
+            "evaluations": [dataclasses.asdict(e) for e in evaluations],
+        }
+        await reporter.finish(payload)
 
 
 async def _run_call(
@@ -271,6 +308,7 @@ async def _run_call(
     patient: PatientInfo,
     mode: str,
     dial_sip: bool,
+    reporter: CallReporter | None = None,
 ) -> None:
     """Start the session, optionally dial the patient via SIP, and log the call."""
     opik = OpikIntegration(
@@ -287,8 +325,17 @@ async def _run_call(
         config.get("call_recording_url") or None,
     )
 
+    if reporter:
+        reporter.start()
+
     llm = build_gateway_llm(config, opik, trace_id)
-    agent = HealthcareAgent(patient=patient, opik=opik, trace_id=trace_id, llm=llm)
+    agent = HealthcareAgent(
+        patient=patient,
+        opik=opik,
+        trace_id=trace_id,
+        llm=llm,
+        reporter=reporter,
+    )
     session = _make_session(llm)
     agent._track_conversation(session)
 
@@ -321,11 +368,20 @@ async def _run_call(
                 opik.flush()
             except Exception:
                 logger.exception("Failed to log SIP error to Opik")
+            if reporter and reporter.enabled:
+                await reporter.finish(
+                    {
+                        "status": "error",
+                        "outcome": "error",
+                        "summary": f"SIP call failed: {status} {detail}",
+                        "transcript": [t.__dict__ for t in agent.transcript],
+                    }
+                )
             ctx.shutdown()
             return
 
     await session_task
-    _log_results(opik, trace_id, agent)
+    await _log_results(opik, trace_id, agent, reporter)
 
 
 async def outbound_caller(ctx: JobContext) -> None:
@@ -352,7 +408,14 @@ async def outbound_caller(ctx: JobContext) -> None:
         ctx.shutdown()
         return
 
-    await _run_call(ctx, config, patient, "outbound_sip", dial_sip=True)
+    call_id = metadata.get("call_id", "")
+    reporter = (
+        CallReporter(base_url=config.get("server_url", ""), call_id=call_id)
+        if call_id and config.get("server_url")
+        else None
+    )
+
+    await _run_call(ctx, config, patient, "outbound_sip", dial_sip=True, reporter=reporter)
 
 
 async def local_test(ctx: JobContext) -> None:
@@ -360,7 +423,14 @@ async def local_test(ctx: JobContext) -> None:
     from config import SAMPLE_PATIENT
 
     await ctx.connect()
-    await _run_call(ctx, load_config(), SAMPLE_PATIENT, "local_test", dial_sip=False)
+    await _run_call(
+        ctx,
+        load_config(),
+        SAMPLE_PATIENT,
+        "local_test",
+        dial_sip=False,
+        reporter=None,
+    )
 
 
 def prewarm(proc: agents.JobProcess) -> None:

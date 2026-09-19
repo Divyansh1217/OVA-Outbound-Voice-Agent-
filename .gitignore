@@ -8,3 +8,9 @@ venv/
 dist/
 build/
 .opik/
+
+# Dashboard / frontend
+voiceagent.db
+frontend/node_modules/
+frontend/dist/
+*.tsbuildinfo

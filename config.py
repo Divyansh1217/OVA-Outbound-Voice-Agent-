@@ -52,6 +52,7 @@ def load_config() -> dict[str, str]:
         "opik_url": os.getenv("OPIK_URL_OVERRIDE", ""),
         "opik_project": os.getenv("OPIK_PROJECT_NAME", "healthcare-voice-agent"),
         "call_recording_url": os.getenv("CALL_RECORDING_URL", ""),
+        "server_url": os.getenv("INTERNAL_API_URL", ""),
     }
 
 
